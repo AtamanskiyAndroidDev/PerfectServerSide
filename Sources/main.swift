@@ -11,53 +11,69 @@ PostgresConnector.password = "perfect"
 PostgresConnector.database = "perfect_testing"
 PostgresConnector.port = 5432
 
-let setupObj = Acronym()
-try? setupObj.setup()
+let setupUser = User()
+try? setupUser.setup()
 
 
 let server = HTTPServer()
 server.serverPort = 8180
 
-func addUser(request: HTTPRequest, responce: HTTPResponse) {
+func addUser(request: HTTPRequest, response: HTTPResponse) {
     do {
         guard let json = request.postBodyString,
             let dict = try json.jsonDecode() as? [String: String],
-            let short = dict["short"],
-            let long = dict["long"] else {
-                responce.completed(status: .badRequest)
+            let name = dict["name"],
+            let email = dict["email"],
+            let password = dict["password"] else {
+                setupErrorBody(with: ["msg": "Wrong key"], response: response)
                 return
         }
-
-        let acronym = Acronym()
-        acronym.short = short
-        acronym.long = long
-        try acronym.save{ id in
-            acronym.id = id as! Int
+        if !validate(email: email, password: password) {
+            setupErrorBody(with: ["msg": "This user already exist"], response: response)
+            return
+        }
+        let user = User()
+        user.name = name
+        user.email = email
+        user.password = password
+        try user.save{ id in
+            user.id = id as! Int
         }
 
-        try responce.setBody(json: acronym.asDictionary())
+        try response.setBody(json: user.asDictionary())
             .setHeader(.contentType, value: "application/json")
             .completed()
     } catch {
-        responce.setBody(string: "Error handling request \(error)")
+        response.setBody(string: "Error handling request \(error)")
         .completed(status: .internalServerError)
     }
 }
 
-func getAll(request: HTTPRequest, responce: HTTPResponse) {
+func setupErrorBody(with message: [String: String], response: HTTPResponse) {
     do {
-        let getAll = Acronym()
+        try response.setBody(json: message)
+            .setHeader(.contentType, value: "application/json")
+            .completed(status: .badRequest)
+    } catch {
+        response.setBody(string: "Error handling request \(error)")
+            .completed(status: .internalServerError)
+    }
+}
+
+func getAll(request: HTTPRequest, response: HTTPResponse) {
+    do {
+        let getAll = User()
         let params = request.queryParams
         let _ = try params.map{ key, value in
             if key == "limits" {
                 if let limits = Int(value) {
                     let cursor = StORMCursor(limit: limits, offset: 0)
                     try getAll.select(whereclause: "true", params: [], orderby: [], cursor: cursor)
-                    var acronymsWithLimits: [[String: Any]] = []
+                    var usersWithLimits: [[String: Any]] = []
                     for element in getAll.rows() {
-                        acronymsWithLimits.append(element.asDictionary())
+                        usersWithLimits.append(element.asDictionary())
                     }
-                    try responce.setBody(json: acronymsWithLimits)
+                    try response.setBody(json: usersWithLimits)
                         .setHeader(.contentType, value: "application/json")
                         .completed()
                 }
@@ -66,25 +82,59 @@ func getAll(request: HTTPRequest, responce: HTTPResponse) {
         }
 
         try getAll.findAll()
-        var acronyms: [[String: Any]] = []
+        var users: [[String: Any]] = []
         for row in getAll.rows() {
-            acronyms.append(row.asDictionary())
+            users.append(row.asDictionary())
         }
 
-        try responce.setBody(json: acronyms)
+        try response.setBody(json: users)
         .setHeader(.contentType, value: "application/json")
         .completed()
 
     } catch {
-        responce.setBody(string: "Error handling request \(error)")
+        response.setBody(string: "Error handling request \(error)")
             .completed(status: .internalServerError)
     }
 }
 
+func login(request: HTTPRequest, response: HTTPResponse) {
+    do {
+        let user = User()
+        let params = request.queryParams
+        let _ = try params.map{ key, value in
+            guard let email = key.isEqual(v: "email"),
+                let password = key.isEqual(v: "password") else {
+                    setupErrorBody(with: ["msg": "Wrong key"], response: response)
+                    return
+            }
+            try user.find(["email": email])
+            guard let currentUser = user.rows().first else { return }
+            if !(currentUser.password == password) {
+                setupErrorBody(with: ["msg": "Incorrect email or password"], response: response)
+                return
+            }
+        }
+    } catch {
+        setupErrorBody(with: ["msg": "Incorrect email or password"], response: response)
+        return
+    }
+    
+}
+
+func validate(email: String, password: String) -> Bool {
+    do {
+        let users = User()
+        try users.find(["email" : email])
+        return users.rows().count == 0
+    } catch {
+        return false
+    }
+}
+
 var routes = Routes()
-routes.add(method: .post, uri: "/add", handler: addUser(request:responce:))
-routes.add(method: .get, uri: "getAll", handler: getAll(request:responce:))
-//routes.add(method: .get, uri: "", handler: <#T##RequestHandler##RequestHandler##(HTTPRequest, HTTPResponse) -> ()#>)
+routes.add(method: .post, uri: "/register", handler: addUser(request:response:))
+routes.add(method: .get, uri: "/getAll", handler: getAll(request:response:))
+routes.add(method: .get, uri: "/login", handler: login(request:response:))
 
 server.addRoutes(routes)
 
