@@ -21,15 +21,19 @@ server.serverPort = 8180
 func addUser(request: HTTPRequest, response: HTTPResponse) {
     do {
         guard let json = request.postBodyString,
-            let dict = try json.jsonDecode() as? [String: String],
-            let name = dict["name"],
-            let email = dict["email"],
-            let password = dict["password"] else {
-                setupErrorBody(with: ["msg": "Wrong key"], response: response)
+            let dict = try json.jsonDecode() as? [String: Any],
+            let name = dict["name"] as? String,
+            let email = dict["email"] as? String,
+            let password = dict["password"] as? String else {
+                setupErrorBody(with: [
+                    "body": ["msg": "Wrong key"],
+                    "error": true], response: response)
                 return
         }
         if !validate(email: email, password: password) {
-            setupErrorBody(with: ["msg": "This user already exist"], response: response)
+            setupErrorBody(with: [
+                "body": ["msg": "This user already exist"],
+                "error": true], response: response)
             return
         }
         let user = User()
@@ -39,8 +43,10 @@ func addUser(request: HTTPRequest, response: HTTPResponse) {
         try user.save{ id in
             user.id = id as! Int
         }
-
-        try response.setBody(json: user.asDictionary())
+        var dic: [String: Any] = [:]
+        dic = ["error": false,
+               "body": user.asDictionary()]
+        try response.setBody(json: dic)
             .setHeader(.contentType, value: "application/json")
             .completed()
     } catch {
@@ -49,7 +55,7 @@ func addUser(request: HTTPRequest, response: HTTPResponse) {
     }
 }
 
-func setupErrorBody(with message: [String: String], response: HTTPResponse) {
+func setupErrorBody<T>(with message: [String: T], response: HTTPResponse) {
     do {
         try response.setBody(json: message)
             .setHeader(.contentType, value: "application/json")
@@ -101,22 +107,44 @@ func login(request: HTTPRequest, response: HTTPResponse) {
     do {
         let user = User()
         let params = request.queryParams
-        let _ = try params.map{ key, value in
-            guard let email = key.isEqual(v: "email"),
-                let password = key.isEqual(v: "password") else {
-                    setupErrorBody(with: ["msg": "Wrong key"], response: response)
-                    return
+        var email: String?
+        var password: String?
+        let _ = params.map{ key, value in
+            if let _ = key.isEqual(v: "email") {
+                email = value
             }
-            try user.find(["email": email])
-            guard let currentUser = user.rows().first else { return }
-            if !(currentUser.password == password) {
-                setupErrorBody(with: ["msg": "Incorrect email or password"], response: response)
-                return
+            if let _ = key.isEqual(v: "password") {
+                password = value
             }
         }
+        guard let userEmail = email,
+                let userPassword = password else {
+            setupErrorBody(with: ["body": ["msg": "Wrong key"],
+                                  "error": true], response: response)
+            return
+        }
+        try user.find(["email": userEmail])
+        guard let currentUser = user.rows().first else {
+            setupErrorBody(with: ["body": ["msg": "User not found"],
+                "error": true], response: response)
+            return
+        }
+        if !(currentUser.password == userPassword) {
+            setupErrorBody(with: [
+                "body": ["msg": "Incorrect email or password"],
+                "error": true], response: response)
+            return
+        } else {
+
+            var dic: [String: Any] = [:]
+            dic = ["error": false,
+                "body": currentUser.asDictionary()]
+            try response.setBody(json: dic)
+            .completed()
+        }
     } catch {
-        setupErrorBody(with: ["msg": "Incorrect email or password"], response: response)
-        return
+        response.setBody(string: "Error handling request \(error)")
+            .completed(status: .internalServerError)
     }
     
 }
